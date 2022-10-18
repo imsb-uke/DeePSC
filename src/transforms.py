@@ -1,6 +1,8 @@
 import torch
 from monai.transforms import Compose, RandAffineDict
 
+# TODO: add dummy tiffs and use monai loader!
+
 def load_image_sv(path):
     # dummy function that loads greyscale image from a path
     _ = path
