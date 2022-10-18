@@ -7,18 +7,15 @@ class SVCNN(nn.Module):
     def __init__(
         self,
         nclasses=1,
-        in_chans=3,
         drop_rate=0.5,
     ):
         super(SVCNN, self).__init__()
 
         self.nclasses = nclasses
-        self.in_chans = in_chans
         self.drop_rate = drop_rate
 
         self.net = tvmodels.squeezenet1_1(
             pretrained=True,
-            num_classes=1000,
         )
         self.net = self._as_sequential_squeezenet(self.net)
 
@@ -52,12 +49,18 @@ class MVCNN(nn.Module):
 
     def forward(self, x):
 
-        y = self.net_1(x)
-        y = y.contiguous().view(-1, self.num_views, *y.shape[2:])  # BxNxL
-        y, _ = self.view_pooling_layer(y)
-        y = self.net_2(y)
+        # x.shape = BxNxCxHxW
+        # merge batch and view dimensions for encoder
+        x = x.contiguous().view(-1, *x.shape[2:])  # B*NxCxHxW
+        x = self.net_1(x) # B*NxL
+        # split batch and patch dimensions for view fusion
+        x = x.contiguous().view(-1, self.num_views, *x.shape[1:])  # BxNxL
+        x, _ = self.view_fusion_layer(x) # BxKxL
+        # squeeze K dimension of 1
+        x = x.squeeze(1)  # BxL
+        x = self.net_2(x)
 
-        return y
+        return x
 
 
 class AttentionFusionLayer(nn.Module):

@@ -14,10 +14,8 @@ from ignite.metrics import Accuracy, Loss
 from ignite.engine import Events
 
 from monai.engines import SupervisedTrainer, SupervisedEvaluator
-from monai.handlers import StatsHandler, ValidationHandler, EarlyStopHandler
+from monai.handlers import StatsHandler, ValidationHandler, EarlyStopHandler, CheckpointSaver
 from monai.data import Dataset, DataLoader
-
-import torchvision.models as torchmodels
 
 from utils import (
     positive_metric_cmp_fn,
@@ -26,13 +24,12 @@ from utils import (
     seed_everything,
 )
 from transforms import get_train_transforms, get_val_transforms
+from models import SVCNN, MVCNN
 
 import logging
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
-
-
 
 
 class PSCTrainer:
@@ -41,10 +38,12 @@ class PSCTrainer:
         
         seed_everything(1234)
 
+        self.cpkt_folder = "checkpoints"
+
         # list of 100 dummy paths
         self.path_list = [f"path_{i}" for i in range(100)]
 
-    def train_svcc(self):
+    def train_svcc(self, ckpt_name="svcnn.pt", max_epochs=1):
 
         train_dataset = Dataset(self.path_list, transform=get_train_transforms(multi_view=False))
         train_dataloader = DataLoader(train_dataset, batch_size=14, shuffle=True, num_workers=0)
@@ -52,13 +51,13 @@ class PSCTrainer:
         val_dataset = Dataset(self.path_list, transform=get_val_transforms(multi_view=False))
         val_dataloader = DataLoader(val_dataset, batch_size=2, shuffle=True, num_workers=0)
 
-        model = torchmodels.resnet18(num_classes=1)
+        model = SVCNN()
 
-        acc_list = self.train(model, train_dataloader, val_dataloader, max_epochs=3)
+        acc_list = self.train(model, train_dataloader, val_dataloader, ckpt_name=ckpt_name, max_epochs=max_epochs)
 
         print(acc_list)
 
-    def train_mvcnn(self):
+    def train_mvcnn(self, ckpt_name="mvcnn.pt", svcnn_cpkt_name="svcnn.pt", max_epochs=1):
 
         train_dataset = Dataset(self.path_list, transform=get_train_transforms(multi_view=True))
         train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0)
@@ -66,16 +65,17 @@ class PSCTrainer:
         val_dataset = Dataset(self.path_list, transform=get_val_transforms(multi_view=True))
         val_dataloader = DataLoader(val_dataset, batch_size=2, shuffle=True, num_workers=0)
 
-        model = torchmodels.resnet18(num_classes=1)
+        single_model = SVCNN()
+        single_model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, svcnn_cpkt_name)))
 
-        # TODO: load weights from single model here
+        model = MVCNN(single_model = single_model, num_views=7)
 
-        acc_list = self.train(model, train_dataloader, val_dataloader, max_epochs=3)
+        acc_list = self.train(model, train_dataloader, val_dataloader, ckpt_name=ckpt_name, max_epochs=max_epochs)
 
         print(acc_list)
 
 
-    def train(self, model, train_dataloader, val_dataloader, max_epochs=3):
+    def train(self, model, train_dataloader, val_dataloader, ckpt_name="cpkt.pt", max_epochs=3):
 
         model, device = setup_device(model, target_devices=[0])
 
@@ -133,6 +133,16 @@ class PSCTrainer:
             trainer=trainer,
         ).attach(evaluator)
 
+        CheckpointSaver(
+            save_dir=self.cpkt_folder,
+            save_dict={"model": model},
+            save_final=False,
+            final_filename="_.pt",
+            save_key_metric=True,
+            key_metric_filename=ckpt_name,
+            key_metric_negative_sign=False,
+        ).attach(evaluator)
+
         acc_list = []
 
         @evaluator.on(Events.EPOCH_COMPLETED(every=1))
@@ -146,7 +156,7 @@ class PSCTrainer:
 
 if __name__ == "__main__":
 
-
     psc_trainer = PSCTrainer()
 
     psc_trainer.train_svcc()
+    psc_trainer.train_mvcnn()

@@ -150,5 +150,9 @@ pymp*
 # data folder
 data
 
+# checkpoints
+*.pt
+
 monai_example
 psc_image_analysis
+
