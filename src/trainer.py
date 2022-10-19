@@ -52,12 +52,18 @@ class PSCTrainer:
         self.sv_data_val = []
         self.mv_data_val = []
 
+        self.sv_data_test = []
+        self.mv_data_test = []
+
         for _ in range(repeat):
             self.sv_data_train, self.mv_data_train = self._append_sample_dicts(
                 self.sv_data_train, self.mv_data_train, pat_folder="pat_0"
             )
             self.sv_data_val, self.mv_data_val = self._append_sample_dicts(
                 self.sv_data_val, self.mv_data_val, pat_folder="pat_0"
+            )
+            self.sv_data_test, self.mv_data_test = self._append_sample_dicts(
+                self.sv_data_test, self.mv_data_test, pat_folder="pat_0"
             )
 
     def _append_sample_dicts(self, sv_list, mv_list, pat_folder="pat_0"):
@@ -75,6 +81,8 @@ class PSCTrainer:
         return sv_list, mv_list
 
     def train_svcc(self, ckpt_name="svcnn.pt", max_epochs=1):
+
+        log.info(" ---------- Training SVCNN")
 
         train_dataset = Dataset(
             self.sv_data_train, transform=get_transforms(multi_view=False, augmentations=True)
@@ -110,6 +118,8 @@ class PSCTrainer:
 
     def train_mvcnn(self, ckpt_name="mvcnn.pt", svcnn_cpkt_name="svcnn.pt", max_epochs=1):
 
+        log.info(" ---------- Training MVCNN")
+
         train_dataset = Dataset(
             self.mv_data_train, transform=get_transforms(multi_view=True, augmentations=True)
         )
@@ -131,7 +141,12 @@ class PSCTrainer:
         )
 
         single_model = SVCNN()
-        single_model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, svcnn_cpkt_name)))
+
+        if svcnn_cpkt_name:
+            single_model.load_state_dict(
+                torch.load(os.path.join(self.cpkt_folder, svcnn_cpkt_name))
+            )
+            log.info(f" ---------- Restored weights from SVCNN checkpoint: {svcnn_cpkt_name}")
 
         model = MVCNN(single_model=single_model, num_views=7)
 
@@ -142,6 +157,31 @@ class PSCTrainer:
             ckpt_name=ckpt_name,
             max_epochs=max_epochs,
         )
+
+        print(acc_list)
+
+    def test_mvcnn(self, ckpt_name="mvcnn.pt"):
+
+        log.info(" ---------- Testing MVCNN")
+
+        test_dataset = Dataset(
+            self.mv_data_test, transform=get_transforms(multi_view=True, augmentations=False)
+        )
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=1,
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
+
+        single_model = SVCNN()
+        model = MVCNN(single_model=single_model, num_views=7)
+
+        if ckpt_name:
+            model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, ckpt_name)))
+            log.info(f" ---------- Restored weights from MVCNN checkpoint: {ckpt_name}")
+
+        acc_list = self.test(model, test_dataloader)
 
         print(acc_list)
 
@@ -211,7 +251,7 @@ class PSCTrainer:
         StatsHandler(
             output_transform=lambda x: None,
             global_epoch_transform=lambda x: trainer.state.epoch,
-            name="evaluator",
+            name="val_evaluator",
         ).attach(evaluator)
 
         # run evaluator on every epoch
@@ -243,8 +283,50 @@ class PSCTrainer:
 
         return acc_list
 
-    def test(self):
-        pass
+    def test(self, model, test_dataloader):
+
+        model, device = setup_device(model, target_devices=[0])
+
+        loss = nn.BCEWithLogitsLoss()
+
+        test_acc = Accuracy(
+            output_transform=lambda x: (
+                torch.sigmoid(x["pred"].float()).round(),
+                x["label"],
+            ),
+            device=device,
+        )
+        test_avg_loss = Loss(
+            loss,
+            output_transform=lambda output: (output["pred"], output["label"]),
+            device=device,
+        )
+
+        # engine.state.output = dict with keys ["image"] ["label"] and ["pred"]
+        evaluator = SupervisedEvaluator(
+            device=device,
+            val_data_loader=test_dataloader,
+            network=model,
+            key_val_metric={"test_acc": test_acc},
+            additional_metrics={"test_avg_loss": test_avg_loss},
+            metric_cmp_fn=positive_metric_cmp_fn,
+            decollate=False,
+        )
+
+        StatsHandler(
+            output_transform=lambda x: None,
+            name="test_evaluator",
+        ).attach(evaluator)
+
+        acc_list = []
+
+        @evaluator.on(Events.EPOCH_COMPLETED(every=1))
+        def store_acc_to_list(engine):
+            acc_list.append(engine.state.metrics["test_acc"])
+
+        evaluator.run()
+
+        return acc_list
 
     def deepsc_ensemble_test(self):
         pass
@@ -256,3 +338,5 @@ if __name__ == "__main__":
 
     psc_trainer.train_svcc()
     psc_trainer.train_mvcnn()
+
+    psc_trainer.test_mvcnn()
