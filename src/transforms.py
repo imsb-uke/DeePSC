@@ -16,7 +16,7 @@ from clahe import Clahed
 
 
 def label_to_np(input, key="label"):
-    input[key] = np.array([input[key]])
+    input[key] = np.array([input[key]], copy=True)
     return input
 
 

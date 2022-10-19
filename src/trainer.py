@@ -1,6 +1,8 @@
 import os
 import torch
 import torch.nn as nn
+import pandas as pd
+from copy import deepcopy
 from torch.optim import AdamW
 from ignite.metrics import Accuracy, Loss
 from ignite.engine import Events
@@ -14,6 +16,7 @@ from monai.handlers import (
 )
 
 from utils import (
+    acc_from_lists,
     positive_metric_cmp_fn,
     stopping_fn_from_positive_metric,
     setup_device,
@@ -56,26 +59,33 @@ class PSCTrainer:
         self.mv_data_test = []
 
         for _ in range(repeat):
-            self.sv_data_train, self.mv_data_train = self._append_sample_dicts(
-                self.sv_data_train, self.mv_data_train, pat_folder="pat_0"
-            )
-            self.sv_data_val, self.mv_data_val = self._append_sample_dicts(
-                self.sv_data_val, self.mv_data_val, pat_folder="pat_0"
-            )
-            self.sv_data_test, self.mv_data_test = self._append_sample_dicts(
-                self.sv_data_test, self.mv_data_test, pat_folder="pat_0"
-            )
+            for pat_folder in ["pat_0_PSC", "pat_1_PSC", "pat_2_CG"]:
+                self.sv_data_train, self.mv_data_train = self._append_sample_dicts(
+                    self.sv_data_train,
+                    self.mv_data_train,
+                    pat_folder=pat_folder,
+                )
+                self.sv_data_val, self.mv_data_val = self._append_sample_dicts(
+                    self.sv_data_val,
+                    self.mv_data_val,
+                    pat_folder=pat_folder,
+                )
+                self.sv_data_test, self.mv_data_test = self._append_sample_dicts(
+                    self.sv_data_test,
+                    self.mv_data_test,
+                    pat_folder=pat_folder,
+                )
 
-    def _append_sample_dicts(self, sv_list, mv_list, pat_folder="pat_0"):
+    def _append_sample_dicts(self, sv_list, mv_list, pat_folder="pat_0_PSC"):
 
         for i in range(self.num_views):
             sv_sample = {}
             sv_sample["image"] = f"images/{pat_folder}/view_{i}.dcm"
-            sv_sample["label"] = 1
+            sv_sample["label"] = 1 if "PSC" in pat_folder else 0
             sv_list.append(sv_sample)
         mv_sample = {}
         mv_sample["image"] = f"images/{pat_folder}"
-        mv_sample["label"] = 1
+        mv_sample["label"] = 1 if "PSC" in pat_folder else 0
         mv_list.append(mv_sample)
 
         return sv_list, mv_list
@@ -85,7 +95,8 @@ class PSCTrainer:
         log.info(" ---------- Training SVCNN")
 
         train_dataset = Dataset(
-            self.sv_data_train, transform=get_transforms(multi_view=False, augmentations=True)
+            deepcopy(self.sv_data_train),
+            transform=get_transforms(multi_view=False, augmentations=True),
         )
         train_dataloader = DataLoader(
             train_dataset,
@@ -95,7 +106,8 @@ class PSCTrainer:
         )
 
         val_dataset = Dataset(
-            self.sv_data_val, transform=get_transforms(multi_view=False, augmentations=False)
+            deepcopy(self.sv_data_val),
+            transform=get_transforms(multi_view=False, augmentations=False),
         )
         val_dataloader = DataLoader(
             val_dataset,
@@ -121,7 +133,8 @@ class PSCTrainer:
         log.info(" ---------- Training MVCNN")
 
         train_dataset = Dataset(
-            self.mv_data_train, transform=get_transforms(multi_view=True, augmentations=True)
+            deepcopy(self.mv_data_train),
+            transform=get_transforms(multi_view=True, augmentations=True),
         )
         train_dataloader = DataLoader(
             train_dataset,
@@ -131,7 +144,8 @@ class PSCTrainer:
         )
 
         val_dataset = Dataset(
-            self.mv_data_val, transform=get_transforms(multi_view=True, augmentations=False)
+            deepcopy(self.mv_data_val),
+            transform=get_transforms(multi_view=True, augmentations=False),
         )
         val_dataloader = DataLoader(
             val_dataset,
@@ -165,11 +179,12 @@ class PSCTrainer:
         log.info(" ---------- Testing MVCNN")
 
         test_dataset = Dataset(
-            self.mv_data_test, transform=get_transforms(multi_view=True, augmentations=False)
+            deepcopy(self.mv_data_test),
+            transform=get_transforms(multi_view=True, augmentations=False),
         )
         test_dataloader = DataLoader(
             test_dataset,
-            batch_size=1,
+            batch_size=2,
             shuffle=False,
             num_workers=self.num_workers,
         )
@@ -181,9 +196,12 @@ class PSCTrainer:
             model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, ckpt_name)))
             log.info(f" ---------- Restored weights from MVCNN checkpoint: {ckpt_name}")
 
-        acc_list = self.test(model, test_dataloader)
+        acc_list, probs_list = self.test(model, test_dataloader)
 
         print(acc_list)
+        print(probs_list)
+
+        return probs_list
 
     def train(self, model, train_dataloader, val_dataloader, ckpt_name="cpkt.pt", max_epochs=3):
 
@@ -319,24 +337,66 @@ class PSCTrainer:
         ).attach(evaluator)
 
         acc_list = []
+        probs_list = []
 
         @evaluator.on(Events.EPOCH_COMPLETED(every=1))
         def store_acc_to_list(engine):
             acc_list.append(engine.state.metrics["test_acc"])
 
+        @evaluator.on(Events.ITERATION_COMPLETED(every=1))
+        def store_preds_to_list(engine):
+            for pred in engine.state.output["pred"]:
+                probs_list.append(torch.sigmoid(pred).cpu().detach().item())
+
         evaluator.run()
 
-        return acc_list
+        return acc_list, probs_list
 
-    def deepsc_ensemble_test(self):
-        pass
+    def train_ensemble(self, n_models=3):
+
+        self.ensemble_probs = []
+
+        for i in range(n_models):
+            self.train_svcc(ckpt_name=f"svcnn_{i}.pt", max_epochs=1)
+            self.train_mvcnn(
+                ckpt_name=f"mvcnn_{i}.pt", svcnn_cpkt_name=f"svcnn_{i}.pt", max_epochs=1
+            )
+            probs = self.test_mvcnn(ckpt_name=f"mvcnn_{i}.pt")
+            self.ensemble_probs.append(probs)
+
+        print(self.ensemble_probs)
+
+        return self.ensemble_probs
+
+    def deepsc_ensemble_prediction(self, ensemble_probs=None, threshold=0.5):
+
+        if ensemble_probs is None:
+            ensemble_probs = self.ensemble_probs
+
+        df = pd.DataFrame(ensemble_probs).transpose()
+
+        df["hce_prob"] = (df - threshold).apply(
+            lambda x: max(x.min(), x.max(), key=abs), axis=1
+        ) + threshold
+        df["hce_pred"] = df["hce_prob"].apply(lambda x: 1 if x >= 0.5 else 0)
+        df["label"] = [x["label"] for x in self.mv_data_test]
+
+        deepsc_acc = acc_from_lists(df["label"], df["hce_pred"])
+        print(f"DeePSC ensemble accuracy: {deepsc_acc}")
+
+        return df, deepsc_acc
 
 
 if __name__ == "__main__":
 
     psc_trainer = PSCTrainer()
 
-    psc_trainer.train_svcc()
-    psc_trainer.train_mvcnn()
+    psc_trainer.train_ensemble(n_models=3)
 
-    psc_trainer.test_mvcnn()
+    # ensemble_probs = [
+    #     [1.0, 0.7, 0.5, 0.3, 0.7],
+    #     [0.6, 0.4, 0.2, 1.0, 0.0],
+    #     [0.1, 0.4, 0.1, 0.9, 0.8],
+    # ]
+
+    psc_trainer.deepsc_ensemble_prediction()
