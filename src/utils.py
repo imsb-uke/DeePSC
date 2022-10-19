@@ -48,14 +48,18 @@ def seed_everything(seed: int) -> None:
         os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-def setup_device(model: nn.Module, target_devices: List[int]) -> Tuple[torch.device, List[int]]:
+def setup_device(
+    model: nn.Module, target_devices: List[int]
+) -> Tuple[torch.device, List[int]]:
     """
     setup GPU device if available, move model into configured device
     """
     available_devices = list(range(torch.cuda.device_count()))
 
     if not available_devices:
-        print("There's no GPU available on this machine. Training will be performed on CPU.")
+        print(
+            "There's no GPU available on this machine. Training will be performed on CPU."
+        )
         device = torch.device("cpu")
         model = model.to(device)
         return model, device

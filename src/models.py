@@ -52,10 +52,10 @@ class MVCNN(nn.Module):
         # x.shape = BxNxCxHxW
         # merge batch and view dimensions for encoder
         x = x.contiguous().view(-1, *x.shape[2:])  # B*NxCxHxW
-        x = self.net_1(x) # B*NxL
+        x = self.net_1(x)  # B*NxL
         # split batch and patch dimensions for view fusion
         x = x.contiguous().view(-1, self.num_views, *x.shape[1:])  # BxNxL
-        x, _ = self.view_fusion_layer(x) # BxKxL
+        x, _ = self.view_fusion_layer(x)  # BxKxL
         # squeeze K dimension of 1
         x = x.squeeze(1)  # BxL
         x = self.net_2(x)
@@ -66,7 +66,8 @@ class MVCNN(nn.Module):
 class AttentionFusionLayer(nn.Module):
     """
     Based on https://github.com/AMLab-Amsterdam/AttentionDeepMIL/blob/master/model.py
-    et k = 1 if only label for the entire bag is relevant, set k=n_patches/instances to get one prediction per instance
+    Set k = 1 if only label for the entire bag is relevant
+    Set k = n_patches/instances to get one prediction per instance
 
     input shape: BxNxL
     output shape: BxKxL
