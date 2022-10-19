@@ -8,6 +8,7 @@ import torch
 """ For multiprocessing"""
 torch.multiprocessing.set_start_method("spawn", force=True)  # for n_workers > 0
 
+from copy import copy
 import torch.nn as nn
 from torch.optim import AdamW
 from ignite.metrics import Accuracy, Loss
@@ -39,17 +40,49 @@ class PSCTrainer:
         seed_everything(1234)
 
         self.cpkt_folder = "checkpoints"
+        self.num_views = 7
+        self.patient_batch_size = 2
+        self.num_workers = 0
 
-        # list of 100 dummy paths
-        self.path_list = [f"path_{i}" for i in range(100)]
+        self.create_data(repeat=5)
+
+    def create_data(self, repeat=5):
+
+        self.sv_data_train = []
+        self.mv_data_train = []
+
+        for _ in range(repeat):
+            for i in range(self.num_views):
+                sv_sample = {}
+                sv_sample["image"] = f"images/pat_0/view_{i}.dcm"
+                sv_sample["label"] = 1
+                self.sv_data_train.append(sv_sample)
+            mv_sample = {}
+            mv_sample["image"] = f"images/pat_0"
+            mv_sample["label"] = 1
+            self.mv_data_train.append(mv_sample)
+
+        self.sv_data_val = []
+        self.mv_data_val = []
+
+        for _ in range(repeat):
+            for i in range(self.num_views):
+                sv_sample = {}
+                sv_sample["image"] = f"images/pat_0/view_{i}.dcm"
+                sv_sample["label"] = 1
+                self.sv_data_val.append(sv_sample)
+            mv_sample = {}
+            mv_sample["image"] = f"images/pat_0"
+            mv_sample["label"] = 1
+            self.mv_data_val.append(mv_sample)
 
     def train_svcc(self, ckpt_name="svcnn.pt", max_epochs=1):
 
-        train_dataset = Dataset(self.path_list, transform=get_train_transforms(multi_view=False))
-        train_dataloader = DataLoader(train_dataset, batch_size=14, shuffle=True, num_workers=0)
+        train_dataset = Dataset(self.sv_data_train, transform=get_train_transforms(multi_view=False))
+        train_dataloader = DataLoader(train_dataset, batch_size=self.num_views*self.patient_batch_size, shuffle=True, num_workers=self.num_workers)
 
-        val_dataset = Dataset(self.path_list, transform=get_val_transforms(multi_view=False))
-        val_dataloader = DataLoader(val_dataset, batch_size=2, shuffle=True, num_workers=0)
+        val_dataset = Dataset(self.sv_data_val, transform=get_val_transforms(multi_view=False))
+        val_dataloader = DataLoader(val_dataset, batch_size=self.num_views*self.patient_batch_size, shuffle=False, num_workers=self.num_workers)
 
         model = SVCNN()
 
@@ -59,11 +92,11 @@ class PSCTrainer:
 
     def train_mvcnn(self, ckpt_name="mvcnn.pt", svcnn_cpkt_name="svcnn.pt", max_epochs=1):
 
-        train_dataset = Dataset(self.path_list, transform=get_train_transforms(multi_view=True))
-        train_dataloader = DataLoader(train_dataset, batch_size=2, shuffle=True, num_workers=0)
+        train_dataset = Dataset(self.mv_data_train, transform=get_train_transforms(multi_view=True))
+        train_dataloader = DataLoader(train_dataset, batch_size=self.patient_batch_size, shuffle=True, num_workers=self.num_workers)
 
-        val_dataset = Dataset(self.path_list, transform=get_val_transforms(multi_view=True))
-        val_dataloader = DataLoader(val_dataset, batch_size=2, shuffle=True, num_workers=0)
+        val_dataset = Dataset(self.mv_data_val, transform=get_val_transforms(multi_view=True))
+        val_dataloader = DataLoader(val_dataset, batch_size=self.patient_batch_size, shuffle=False, num_workers=self.num_workers)
 
         single_model = SVCNN()
         single_model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, svcnn_cpkt_name)))
@@ -73,7 +106,6 @@ class PSCTrainer:
         acc_list = self.train(model, train_dataloader, val_dataloader, ckpt_name=ckpt_name, max_epochs=max_epochs)
 
         print(acc_list)
-
 
     def train(self, model, train_dataloader, val_dataloader, ckpt_name="cpkt.pt", max_epochs=3):
 
@@ -152,6 +184,12 @@ class PSCTrainer:
         trainer.run()
 
         return acc_list
+
+    def test(self):
+        pass
+
+    def deepsc_ensemble_test(self):
+        pass
 
 
 if __name__ == "__main__":

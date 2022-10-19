@@ -95,50 +95,13 @@ ENV/
 # Rope project settings
 .ropeproject
 
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-
-# input data, saved log, checkpoints, cache
-data/
-input/
-saved/
-runs/
-sweeps/
-valid_runs/
-runs_old/
-datasets/
-run1.txt
-notebooks/runs/
-runs_array/
-verification_images/
-wandb/
-results_old/
-results_updated/
-*cache*/
-
-# MONAI
-MONAI
-
-# editor, os cache directory
-.idea/
-__MACOSX/
-
-
 # csv
-medical_data.csv
-profile.csv
+*.csv
+*.csv
 
 # images
 *.png
-
-# medical data csvs
-medical_data_*.csv
-
-# mvcnn
-mvcnn_pytorch/
+*.dcm
 
 # code profile
 *profile*.csv
@@ -147,12 +110,10 @@ mvcnn_pytorch/
 core
 pymp*
 
-# data folder
-data
-
 # checkpoints
 *.pt
 
 monai_example
 psc_image_analysis
 
+.vscode
