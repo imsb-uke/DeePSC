@@ -122,7 +122,6 @@ class DeePSCTrainer:
             ensemble_probs = self.ensemble_probs
 
         df = pd.DataFrame(ensemble_probs).transpose()
-
         df["hce_prob"] = (df - threshold).apply(
             lambda x: max(x.min(), x.max(), key=abs), axis=1
         ) + threshold
@@ -130,6 +129,7 @@ class DeePSCTrainer:
         df["label"] = [x["label"] for x in self.mv_data_test]
 
         deepsc_acc = acc_from_lists(df["label"], df["hce_pred"])
+
         log.info(f" ---------- DeePSC ensemble accuracy: {deepsc_acc}")
 
         return df, deepsc_acc
