@@ -7,7 +7,9 @@ from ignite.engine import Engine
 
 
 def acc_from_lists(true_list, pred_list):
-
+    """
+    Compute accuracy from a list of labels and a list of predictions {0,1}
+    """
     return sum(1 for x, y in zip(true_list, pred_list) if x == y) / len(true_list)
 
 

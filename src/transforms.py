@@ -25,6 +25,7 @@ def label_to_np(input, key="label"):
 
 def move_channels_first(input, key="image"):
     # move the channel axis to the first position
+    # because contrary to the description in the ITKReader, it outputs as WHC
     input[key] = np.transpose(input[key], (2, 1, 0))
     return input
 

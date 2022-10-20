@@ -43,6 +43,7 @@ class DeePSCTrainer:
         repeat_sample_dataset: int = 5,
         use_gpu: bool = True,
         cpkt_folder: str = "checkpoints",
+        image_folder: str = "images",
     ) -> None:
 
         seed_everything(seed)
@@ -50,6 +51,7 @@ class DeePSCTrainer:
         self.num_views = num_views
         self.num_workers = num_workers
         self.cpkt_folder = cpkt_folder
+        self.image_folder = image_folder
         self.target_device = [0] if use_gpu else None
 
         self.create_example_data(repeat=repeat_sample_dataset)
@@ -57,6 +59,10 @@ class DeePSCTrainer:
     def create_example_data(
         self, repeat=5, example_folders=["pat_0_PSC", "pat_1_PSC", "pat_2_CG"]
     ):
+        """
+        Create example single- and multi-view data for training, validation and test
+        as lists containing a dict per sample with {"image": "image_path", "label": 0/1}
+        """
 
         self.sv_data_train = []
         self.mv_data_train = []
@@ -85,19 +91,48 @@ class DeePSCTrainer:
                     pat_folder=pat_folder,
                 )
 
-    def _append_sample_dicts(self, sv_list, mv_list, pat_folder="pat_0_PSC"):
+    def train_ensemble(
+        self, n_models=3, sv_lr=1e-4, mv_lr=1e-4, sv_epochs=5, mv_epochs=5, sv_bs=14, mv_bs=2
+    ):
 
-        for i in range(self.num_views):
-            sv_sample = {}
-            sv_sample["image"] = f"images/{pat_folder}/view_{i}.dcm"
-            sv_sample["label"] = 1 if "PSC" in pat_folder else 0
-            sv_list.append(sv_sample)
-        mv_sample = {}
-        mv_sample["image"] = f"images/{pat_folder}"
-        mv_sample["label"] = 1 if "PSC" in pat_folder else 0
-        mv_list.append(mv_sample)
+        self.ensemble_probs = []
 
-        return sv_list, mv_list
+        for i in range(n_models):
+
+            log.info(f" ---------- Training ensemble model {i+1} of {n_models}")
+
+            self.train_svcc(
+                ckpt_name=f"svcnn_{i}.pt", lr=sv_lr, max_epochs=sv_epochs, batch_size=sv_bs
+            )
+            self.train_mvcnn(
+                ckpt_name=f"mvcnn_{i}.pt",
+                svcnn_cpkt_name=f"svcnn_{i}.pt",
+                lr=mv_lr,
+                max_epochs=mv_epochs,
+                batch_size=mv_bs,
+            )
+            probs = self.test_mvcnn(ckpt_name=f"mvcnn_{i}.pt")
+            self.ensemble_probs.append(probs)
+
+        return self.ensemble_probs
+
+    def deepsc_ensemble_prediction(self, ensemble_probs=None, threshold=0.5):
+
+        if ensemble_probs is None:
+            ensemble_probs = self.ensemble_probs
+
+        df = pd.DataFrame(ensemble_probs).transpose()
+
+        df["hce_prob"] = (df - threshold).apply(
+            lambda x: max(x.min(), x.max(), key=abs), axis=1
+        ) + threshold
+        df["hce_pred"] = df["hce_prob"].apply(lambda x: 1 if x >= threshold else 0)
+        df["label"] = [x["label"] for x in self.mv_data_test]
+
+        deepsc_acc = acc_from_lists(df["label"], df["hce_pred"])
+        log.info(f" ---------- DeePSC ensemble accuracy: {deepsc_acc}")
+
+        return df, deepsc_acc
 
     def train_svcc(self, ckpt_name="svcnn.pt", lr=1e-4, max_epochs=1, batch_size=14):
 
@@ -366,45 +401,16 @@ class DeePSCTrainer:
 
         return acc_list, probs_list
 
-    def train_ensemble(
-        self, n_models=3, sv_lr=1e-4, mv_lr=1e-4, sv_epochs=5, mv_epochs=5, sv_bs=14, mv_bs=2
-    ):
+    def _append_sample_dicts(self, sv_list, mv_list, pat_folder="pat_0_PSC"):
 
-        self.ensemble_probs = []
+        for i in range(self.num_views):
+            sv_sample = {}
+            sv_sample["image"] = f"{self.image_folder}/{pat_folder}/view_{i}.dcm"
+            sv_sample["label"] = 1 if "PSC" in pat_folder else 0
+            sv_list.append(sv_sample)
+        mv_sample = {}
+        mv_sample["image"] = f"{self.image_folder}/{pat_folder}"
+        mv_sample["label"] = 1 if "PSC" in pat_folder else 0
+        mv_list.append(mv_sample)
 
-        for i in range(n_models):
-
-            log.info(f" ---------- Training ensemble model {i+1} of {n_models}")
-
-            self.train_svcc(
-                ckpt_name=f"svcnn_{i}.pt", lr=sv_lr, max_epochs=sv_epochs, batch_size=sv_bs
-            )
-            self.train_mvcnn(
-                ckpt_name=f"mvcnn_{i}.pt",
-                svcnn_cpkt_name=f"svcnn_{i}.pt",
-                lr=mv_lr,
-                max_epochs=mv_epochs,
-                batch_size=mv_bs,
-            )
-            probs = self.test_mvcnn(ckpt_name=f"mvcnn_{i}.pt")
-            self.ensemble_probs.append(probs)
-
-        return self.ensemble_probs
-
-    def deepsc_ensemble_prediction(self, ensemble_probs=None, threshold=0.5):
-
-        if ensemble_probs is None:
-            ensemble_probs = self.ensemble_probs
-
-        df = pd.DataFrame(ensemble_probs).transpose()
-
-        df["hce_prob"] = (df - threshold).apply(
-            lambda x: max(x.min(), x.max(), key=abs), axis=1
-        ) + threshold
-        df["hce_pred"] = df["hce_prob"].apply(lambda x: 1 if x >= threshold else 0)
-        df["label"] = [x["label"] for x in self.mv_data_test]
-
-        deepsc_acc = acc_from_lists(df["label"], df["hce_pred"])
-        log.info(f" ---------- DeePSC ensemble accuracy: {deepsc_acc}")
-
-        return df, deepsc_acc
+        return sv_list, mv_list

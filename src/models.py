@@ -4,6 +4,13 @@ import torchvision.models as tvmodels
 
 
 class SVCNN(nn.Module):
+    """
+    Single-view CNN for input and classification of individual MRCP images
+
+    input shape: BxCxHxW
+    output shape: Bxnclasses
+    """
+
     def __init__(
         self,
         nclasses=1,
@@ -23,6 +30,11 @@ class SVCNN(nn.Module):
         return self.net(x)
 
     def _as_sequential_squeezenet(self, model):
+        """
+        Replace the convolutional head of squeezenet by GAP, flatten, dropout
+        and a fully connected classification layer
+        """
+
         layers = list(model.features.children())
         global_pool = nn.AdaptiveAvgPool2d(1)
         flatten = nn.Flatten(1)
@@ -33,6 +45,13 @@ class SVCNN(nn.Module):
 
 
 class MVCNN(nn.Module):
+    """
+    Multi-view CNN for parallel input and classification of all MRCP views per patient
+
+    input shape: BxNxCxHxW
+    output shape: Bxnclasses
+    """
+
     def __init__(
         self,
         single_model,
