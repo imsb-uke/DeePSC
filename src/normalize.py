@@ -7,7 +7,7 @@ from monai.config import DtypeLike, KeysCollection
 
 class Normalized(Transform):
     """
-    Apply intensity scaling to every slice of first dimension of input image.
+    Apply histogram based intensity scaling to every slice of first dimension of input image.
 
     Args:
         keys: keys of the corresponding item to be transformed.

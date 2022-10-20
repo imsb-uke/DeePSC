@@ -2,7 +2,6 @@ import os
 import torch
 import torch.nn as nn
 import pandas as pd
-from copy import deepcopy
 from torch.optim import AdamW
 from ignite.metrics import Accuracy, Loss
 from ignite.engine import Events
@@ -15,15 +14,15 @@ from monai.handlers import (
     CheckpointSaver,
 )
 
-from utils import (
+from src.utils import (
     acc_from_lists,
     positive_metric_cmp_fn,
     stopping_fn_from_positive_metric,
     setup_device,
     seed_everything,
 )
-from transforms import get_transforms
-from models import SVCNN, MVCNN
+from src.transforms import get_transforms
+from src.models import SVCNN, MVCNN
 
 import logging
 
@@ -35,19 +34,29 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
-class PSCTrainer:
-    def __init__(self) -> None:
+class DeePSCTrainer:
+    def __init__(
+        self,
+        seed: int = 42,
+        num_views: int = 7,
+        num_workers: int = 0,
+        repeat_sample_dataset: int = 5,
+        use_gpu: bool = True,
+        cpkt_folder: str = "checkpoints",
+    ) -> None:
 
-        seed_everything(1234)
+        seed_everything(seed)
 
-        self.cpkt_folder = "checkpoints"
-        self.num_views = 7
-        self.patient_batch_size = 2
-        self.num_workers = 0
+        self.num_views = num_views
+        self.num_workers = num_workers
+        self.cpkt_folder = cpkt_folder
+        self.target_device = [0] if use_gpu else None
 
-        self._create_example_data(repeat=5)
+        self.create_example_data(repeat=repeat_sample_dataset)
 
-    def _create_example_data(self, repeat=5):
+    def create_example_data(
+        self, repeat=5, example_folders=["pat_0_PSC", "pat_1_PSC", "pat_2_CG"]
+    ):
 
         self.sv_data_train = []
         self.mv_data_train = []
@@ -59,7 +68,7 @@ class PSCTrainer:
         self.mv_data_test = []
 
         for _ in range(repeat):
-            for pat_folder in ["pat_0_PSC", "pat_1_PSC", "pat_2_CG"]:
+            for pat_folder in example_folders:
                 self.sv_data_train, self.mv_data_train = self._append_sample_dicts(
                     self.sv_data_train,
                     self.mv_data_train,
@@ -90,66 +99,69 @@ class PSCTrainer:
 
         return sv_list, mv_list
 
-    def train_svcc(self, ckpt_name="svcnn.pt", max_epochs=1):
+    def train_svcc(self, ckpt_name="svcnn.pt", lr=1e-4, max_epochs=1, batch_size=14):
 
         log.info(" ---------- Training SVCNN")
 
         train_dataset = Dataset(
-            deepcopy(self.sv_data_train),
+            self.sv_data_train,
             transform=get_transforms(multi_view=False, augmentations=True),
         )
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=self.num_views * self.patient_batch_size,
+            batch_size=batch_size,
             shuffle=True,
             num_workers=self.num_workers,
         )
 
         val_dataset = Dataset(
-            deepcopy(self.sv_data_val),
+            self.sv_data_val,
             transform=get_transforms(multi_view=False, augmentations=False),
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=self.num_views * self.patient_batch_size,
+            batch_size=batch_size,
             shuffle=False,
             num_workers=self.num_workers,
         )
 
         model = SVCNN()
 
-        acc_list = self.train(
+        acc_list = self._train(
             model,
             train_dataloader,
             val_dataloader,
             ckpt_name=ckpt_name,
+            lr=lr,
             max_epochs=max_epochs,
         )
 
-        print(acc_list)
+        log.info(f" ---------- SVCNN validation accuracy over epochs: {acc_list}")
 
-    def train_mvcnn(self, ckpt_name="mvcnn.pt", svcnn_cpkt_name="svcnn.pt", max_epochs=1):
+    def train_mvcnn(
+        self, ckpt_name="mvcnn.pt", svcnn_cpkt_name="svcnn.pt", lr=1e-4, max_epochs=1, batch_size=2
+    ):
 
         log.info(" ---------- Training MVCNN")
 
         train_dataset = Dataset(
-            deepcopy(self.mv_data_train),
+            self.mv_data_train,
             transform=get_transforms(multi_view=True, augmentations=True),
         )
         train_dataloader = DataLoader(
             train_dataset,
-            batch_size=self.patient_batch_size,
+            batch_size=batch_size,
             shuffle=True,
             num_workers=self.num_workers,
         )
 
         val_dataset = Dataset(
-            deepcopy(self.mv_data_val),
+            self.mv_data_val,
             transform=get_transforms(multi_view=True, augmentations=False),
         )
         val_dataloader = DataLoader(
             val_dataset,
-            batch_size=self.patient_batch_size,
+            batch_size=batch_size,
             shuffle=False,
             num_workers=self.num_workers,
         )
@@ -162,29 +174,30 @@ class PSCTrainer:
             )
             log.info(f" ---------- Restored weights from SVCNN checkpoint: {svcnn_cpkt_name}")
 
-        model = MVCNN(single_model=single_model, num_views=7)
+        model = MVCNN(single_model=single_model, num_views=self.num_views)
 
-        acc_list = self.train(
+        acc_list = self._train(
             model,
             train_dataloader,
             val_dataloader,
             ckpt_name=ckpt_name,
+            lr=lr,
             max_epochs=max_epochs,
         )
 
-        print(acc_list)
+        log.info(f" ---------- MVCNN validation accuracy over epochs: {acc_list}")
 
     def test_mvcnn(self, ckpt_name="mvcnn.pt"):
 
         log.info(" ---------- Testing MVCNN")
 
         test_dataset = Dataset(
-            deepcopy(self.mv_data_test),
+            self.mv_data_test,
             transform=get_transforms(multi_view=True, augmentations=False),
         )
         test_dataloader = DataLoader(
             test_dataset,
-            batch_size=2,
+            batch_size=1,
             shuffle=False,
             num_workers=self.num_workers,
         )
@@ -196,18 +209,19 @@ class PSCTrainer:
             model.load_state_dict(torch.load(os.path.join(self.cpkt_folder, ckpt_name)))
             log.info(f" ---------- Restored weights from MVCNN checkpoint: {ckpt_name}")
 
-        acc_list, probs_list = self.test(model, test_dataloader)
+        acc_list, probs_list = self._test(model, test_dataloader)
 
-        print(acc_list)
-        print(probs_list)
+        log.info(f" ---------- MVCNN test accuracy: {acc_list}")
 
         return probs_list
 
-    def train(self, model, train_dataloader, val_dataloader, ckpt_name="cpkt.pt", max_epochs=3):
+    def _train(
+        self, model, train_dataloader, val_dataloader, ckpt_name="cpkt.pt", lr=1e-4, max_epochs=3
+    ):
 
-        model, device = setup_device(model, target_devices=[0])
+        model, device = setup_device(model, target_devices=self.target_device)
 
-        optimizer = AdamW([{"params": model.parameters()}])
+        optimizer = AdamW([{"params": model.parameters()}], lr=lr)
 
         loss = nn.BCEWithLogitsLoss()
 
@@ -301,9 +315,9 @@ class PSCTrainer:
 
         return acc_list
 
-    def test(self, model, test_dataloader):
+    def _test(self, model, test_dataloader):
 
-        model, device = setup_device(model, target_devices=[0])
+        model, device = setup_device(model, target_devices=self.target_device)
 
         loss = nn.BCEWithLogitsLoss()
 
@@ -352,19 +366,28 @@ class PSCTrainer:
 
         return acc_list, probs_list
 
-    def train_ensemble(self, n_models=3):
+    def train_ensemble(
+        self, n_models=3, sv_lr=1e-4, mv_lr=1e-4, sv_epochs=5, mv_epochs=5, sv_bs=14, mv_bs=2
+    ):
 
         self.ensemble_probs = []
 
         for i in range(n_models):
-            self.train_svcc(ckpt_name=f"svcnn_{i}.pt", max_epochs=1)
+
+            log.info(f" ---------- Training ensemble model {i+1} of {n_models}")
+
+            self.train_svcc(
+                ckpt_name=f"svcnn_{i}.pt", lr=sv_lr, max_epochs=sv_epochs, batch_size=sv_bs
+            )
             self.train_mvcnn(
-                ckpt_name=f"mvcnn_{i}.pt", svcnn_cpkt_name=f"svcnn_{i}.pt", max_epochs=1
+                ckpt_name=f"mvcnn_{i}.pt",
+                svcnn_cpkt_name=f"svcnn_{i}.pt",
+                lr=mv_lr,
+                max_epochs=mv_epochs,
+                batch_size=mv_bs,
             )
             probs = self.test_mvcnn(ckpt_name=f"mvcnn_{i}.pt")
             self.ensemble_probs.append(probs)
-
-        print(self.ensemble_probs)
 
         return self.ensemble_probs
 
@@ -378,25 +401,10 @@ class PSCTrainer:
         df["hce_prob"] = (df - threshold).apply(
             lambda x: max(x.min(), x.max(), key=abs), axis=1
         ) + threshold
-        df["hce_pred"] = df["hce_prob"].apply(lambda x: 1 if x >= 0.5 else 0)
+        df["hce_pred"] = df["hce_prob"].apply(lambda x: 1 if x >= threshold else 0)
         df["label"] = [x["label"] for x in self.mv_data_test]
 
         deepsc_acc = acc_from_lists(df["label"], df["hce_pred"])
-        print(f"DeePSC ensemble accuracy: {deepsc_acc}")
+        log.info(f" ---------- DeePSC ensemble accuracy: {deepsc_acc}")
 
         return df, deepsc_acc
-
-
-if __name__ == "__main__":
-
-    psc_trainer = PSCTrainer()
-
-    psc_trainer.train_ensemble(n_models=3)
-
-    # ensemble_probs = [
-    #     [1.0, 0.7, 0.5, 0.3, 0.7],
-    #     [0.6, 0.4, 0.2, 1.0, 0.0],
-    #     [0.1, 0.4, 0.1, 0.9, 0.8],
-    # ]
-
-    psc_trainer.deepsc_ensemble_prediction()

@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from copy import deepcopy
 from monai.transforms import (
     Compose,
     LoadImaged,
@@ -11,13 +12,15 @@ from monai.transforms import (
 )
 from monai.data.image_reader import ITKReader
 
-from normalize import Normalized
-from clahe import Clahed
+from src.normalize import Normalized
+from src.clahe import Clahed
 
 
 def label_to_np(input, key="label"):
-    input[key] = np.array([input[key]], copy=True)
-    return input
+    # create numpy array from label int
+    output = deepcopy(input)
+    output[key] = np.array([output[key]])
+    return output
 
 
 def move_channels_first(input, key="image"):
@@ -28,16 +31,16 @@ def move_channels_first(input, key="image"):
 
 def grey_to_rgb_sv(input, key="image"):
     # repeat the single channel image 3 times to make it RGB
+    # (1, 227, 227) -> (3, 227, 227)
     input[key] = input[key].repeat(3, 1, 1)
-    # shape is now (3, 256, 256)
     return input
 
 
 def grey_to_rgb_mv(input, key="image"):
     # add a channel axis to the image (before the 7 views were stacked in the channel axis)
     # repeat the single channel image 3 times to make it RGB
+    # (7, 227, 227) -> (7, 3, 227, 227)
     input[key] = input[key].unsqueeze(1).repeat(1, 3, 1, 1)
-    # shape is now (7, 3, 256, 256)
     return input
 
 
@@ -49,14 +52,15 @@ def get_transforms(multi_view=False, augmentations=True):
 
     transforms = []
 
+    # make np array from label int
     transforms.append(label_to_np)
-
+    # set up the dicom reader
     transforms.append(LoadImaged(keys=["image"], reader=ITKReader, image_only=True))
-
+    # move the channel axis from last to first position
     transforms.append(move_channels_first)
-
+    # resize to 227x277 (squeezenet default input size)
     transforms.append(Resized(keys=["image"], spatial_size=[227, 227]))
-
+    # perform contrast-limited adaptive histogram equalization
     transforms.append(
         Clahed(
             keys=["image"],
@@ -66,7 +70,7 @@ def get_transforms(multi_view=False, augmentations=True):
             dtype=np.float32,
         )
     )
-
+    # normalize the image based on the 5th and 95th percentile of the histogram
     transforms.append(
         Normalized(
             keys=["image"],
@@ -77,7 +81,7 @@ def get_transforms(multi_view=False, augmentations=True):
             dtype=np.float32,
         )
     )
-
+    # random augmentations
     if augmentations:
         transforms.append(
             RandAffined(
@@ -91,9 +95,9 @@ def get_transforms(multi_view=False, augmentations=True):
         )
         transforms.append(RandHistogramShiftd(keys=["image"], prob=0.5, num_control_points=20))
         transforms.append(RandGaussianNoised(keys=["image"], prob=0.5, mean=0.0, std=0.05))
-
+    # convert to pytorch tensor
     transforms.append(ToTensord(keys=["image", "label"], dtype=torch.float))
-
+    # repeat the single channel image 3 times to make it RGB
     transforms.append(grey_to_rgb_mv if multi_view else grey_to_rgb_sv)
 
     return Compose(transforms)
