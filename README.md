@@ -7,7 +7,7 @@
 
 ## Description
 
-This repo contains an minimal running implementation of the DeePSC model proposed in "DeePSC - deep learning-based decision support for the diagnosis of primary sclerosing cholangitis on 2D magnetic resonance cholangiopancreatography".
+This repository contains an exemplary implementation of the DeePSC model proposed in "DeePSC - deep learning-based decision support for the diagnosis of primary sclerosing cholangitis on 2D magnetic resonance cholangiopancreatography".
 
 <div align="center">
 
