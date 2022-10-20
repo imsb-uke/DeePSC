@@ -100,8 +100,8 @@ ENV/
 *.csv
 
 # images
-*.png
-*.dcm
+# *.png
+# *.dcm
 
 # code profile
 *profile*.csv
