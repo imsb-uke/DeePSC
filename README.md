@@ -9,6 +9,12 @@
 
 This repo contains an minimal running implementation of the DeePSC model proposed in "DeePSC - deep learning-based decision support for the diagnosis of primary sclerosing cholangitis on 2D magnetic resonance cholangiopancreatography".
 
+<div align="center">
+
+![](deepsc_architecture.png)
+
+</div>
+
 ## How to run
 
 Install dependencies
@@ -21,6 +27,12 @@ cd DeePSC
 # create conda environment
 conda create -n deepsc python=3.6 -y
 conda activate deepsc
+
+# OR
+
+# create virtual environment
+python3.6 -m venv .venv
+source .venv/bin/activate
 
 # install python requirements
 pip install -r requirements.txt
